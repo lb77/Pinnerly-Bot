@@ -1,0 +1,21 @@
+{
+  "name": "pinnerly-bot",
+  "version": "1.0.0",
+  "description": "Bot for mirroring channel pins on Discord",
+  "main": "pinbot.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon ./pinbot.js",
+    "debug": "nodemon --inspect ./pinbot.js"
+  },
+  "author": "Ron George",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "discord.js": "^13.1.0",
+    "sequelize": "^6.6.5",
+    "sqlite3": "^4.2.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.12"
+  }
+}

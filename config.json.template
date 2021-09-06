@@ -1,0 +1,7 @@
+{
+    "prefix": "pin2.",
+    "token": "",
+    "db": "pinbot.db",
+    "max_pins": 30,
+    "activity": "with channel pins"
+}
