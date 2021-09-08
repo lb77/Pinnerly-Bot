@@ -1,8 +1,5 @@
 /*
 *   TODO:
-*    - Using mentions.channels in remove.js can be problematic for rules with deleted channels
-*    - utils.js is probably unnecessary
-*    - Some arrow functions might be better as named functions
 *    - Maybe optimize error handling? (Could bubble up generic errors to client message listener)
 */
 
@@ -18,8 +15,6 @@ const client = new Client({intents: [
 ]});
 const force = process.argv.includes("--reset") || process.argv.includes("-r");
 
-// Webhook rate limit per channel is currently 30 msgs/60 secs
-client.MAX_PINS = Config.max_pins;
 client.db = Database.init(Config.db, force);
 client.commands = new Collection();
 client.utils = require("./lib/utils");
@@ -30,85 +25,64 @@ for (const file of commandFiles) {
     client.commands.set(command.name, command);
 }
 
-client.once("ready", async () => {
-    debugger;
+client.once("ready", async function() {
     client.guildData = new Collection();
 
     // Retrieve info for each guild
-    let guildInfo = await Promise.allSettled(client.guilds.cache.map((guild) => {
-        // Group queries into [Guild, Settings, Rules] promise array
-        return Promise.allSettled([
-            guild,
-            client.db.getGuild(guild.id),
-            client.db.getRules(guild.id)
-        ]);
-    })).catch(console.error);
-    
-    guildInfo.map((obj) => {
-        let [guildObj, settings, rules] = obj.value;
-        return {
-            guildObj: guildObj.value,
-            settings: settings.value,
-            rules: rules.value
-        }
-    }).forEach(async (guild) => {
-        try {
+    client.guilds.fetch().then(guilds => guilds.forEach(guild =>
+        guild.fetch().then(async function (guild) {
+            let settings = await client.db.getGuild(guild.id);
+            let rules = await client.db.getRules(guild.id);
+            let deletedRules = new Collection();
             // Cooldowns are enforced per channel, but the actual setting is guild-wide (a) b/c I'm lazy and (b) because I'd need to figure out good UX to set it otherwise
             let guildDataObj = {
-                cooldown: guild.settings.cooldown,
+                cooldown: settings.cooldown,
                 cachedPins: new Collection()
-            };
+            }
 
             // Cache pins for each channel
-            guild.rules.forEach(async (rule) => {
+            rules.forEach(async function (rule) {
                 if (guildDataObj.cachedPins.get(rule.channelFrom)) return;
 
-                let channel = guild.guildObj.channels.resolve(rule.channelFrom);
-                guildDataObj.cachedPins.set(channel.id, await channel.messages.fetchPinned());
-            });
+                let channel = guild.channels.resolve(rule.channelFrom);
 
-            client.guildData.set(guild.guildObj.id, guildDataObj);
-        } catch (err) {
-            console.error(err);
-        }
-    });
+                if (!channel) {
+                    if (!deletedRules.has(rule.channelFrom)) {
+                        let count = await client.db.autoremoveRules(guild.id, rule.channelFrom);
+                        deletedRules.set(rule.channelFrom, count);
+                        guild.systemChannel?.send(`Deleted ${count} rules containing deleted channel ${rule.channelFrom}`);
+                    }
+                    return;
+                }
+
+                guildDataObj.cachedPins.set(channel.id, await channel.messages.fetchPinned());
+                client.guildData.set(guild.id, guildDataObj);
+            });
+        })
+    ));
 
     client.user.setActivity(Config.activity);
     console.log("Client ready!");
 });
 
-client.on("guildCreate", (guild) => {
+client.on("guildCreate", function (guild) {
     // client.db.getGuild creates Settings entry if nonexistent
     client.db.getGuild(guild.id).catch(console.err);
 });
 
-client.on("channelPinsUpdate", async (channel) => {
-    let pins = await channel.messages.fetchPinned();
-    let guildData = client.guildData.get(channel.guild.id);
-    let oldSize = guildData.cachedPins.get(channel.id)?.size;
-
-    guildData.cachedPins.set(channel.id, pins);
-
-    // Means pin was added
-    if (pins.size > oldSize) {
-        client.commands.get("migrate").execute(channel, 1);
-    }
-});
-
-client.on("messageCreate", (message) => {
+client.on("messageCreate", function (message) {
     // All of these cases are irrelevant to us
     if (message.author.bot ||
         message.channel.type === "dm" ||
         !message.content.startsWith(Config.prefix)) {
-            return;
+        return;
     }
-
-    console.log(message.content);
 
     let args = message.content.slice(Config.prefix.length).split(/\s+/);
     let commandName = args.shift().toLowerCase();
 
     if (!client.commands.has(commandName)) return;
+    console.log(message.content);
 
     let command = client.commands.get(commandName);
     if (command.permissions && !message.member.hasPermission(command.permissions)) {
@@ -125,4 +99,27 @@ client.on("messageCreate", (message) => {
     }
 });
 
+client.on("channelPinsUpdate", async function (channel) {
+    let pins = await channel.messages.fetchPinned();
+    let guildData = client.guildData.get(channel.guildId);
+    let oldSize = guildData.cachedPins.get(channel.id)?.size;
+
+    guildData.cachedPins.set(channel.id, pins);
+
+    // Means pin was added
+    if (pins.size > oldSize) {
+        client.commands.get("migrate").execute(channel, 1);
+    }
+});
+
+client.on("channelDelete", async function (channel) {
+    let count = await client.db.autoremoveRules(channel.guildId, channel.id);
+    channel.guild.systemChannel?.send(`Deleted ${count} rules after deletion of #${channel.name} (ID: ${channel.id})`);
+});
+
 client.login(Config.token);
+
+process.on("SIGINT", function () {
+    client.destroy();
+    process.exit(0);
+});
