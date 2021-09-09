@@ -56,8 +56,9 @@ client.once("ready", async function() {
                 }
 
                 guildDataObj.cachedPins.set(channel.id, await channel.messages.fetchPinned());
-                client.guildData.set(guild.id, guildDataObj);
             });
+
+            client.guildData.set(guild.id, guildDataObj);
         })
     ));
 
